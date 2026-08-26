@@ -4,6 +4,8 @@
 
 'use strict';
 
+// デザイン基準サイズ。Scale.EXPAND によりアスペクト比を保ったまま
+// ゲーム世界が画面全体まで広がるので、実際のサイズは scene.scale.width/height で取る
 const W = 480;
 const H = 720;
 const GROUND_H = 84;
@@ -152,39 +154,49 @@ function textStyle(size, color, strokeWidth) {
   };
 }
 
+// 現在の画面サイズいっぱいに背景を描き、後で破棄できるように参照を返す
 function drawBackground(scene) {
-  const g = scene.add.graphics();
-  g.fillGradientStyle(0xffe3ee, 0xffe3ee, 0xfff8e6, 0xfff8e6, 1);
-  g.fillRect(0, 0, W, H);
+  const w = scene.scale.width;
+  const h = scene.scale.height;
+  const objects = [];
+  const tweens = [];
+
+  const sky = scene.add.graphics().setDepth(-10);
+  sky.fillGradientStyle(0xffe3ee, 0xffe3ee, 0xfff8e6, 0xfff8e6, 1);
+  sky.fillRect(0, 0, w, h);
+  objects.push(sky);
 
   // ふわふわ流れる雲
   for (let i = 0; i < 3; i++) {
     const cloud = scene.add.image(
-      Phaser.Math.Between(0, W),
+      Phaser.Math.Between(0, w),
       70 + i * 90,
       'cloud'
-    ).setAlpha(0.85).setScale(0.8 + i * 0.15);
-    scene.tweens.add({
+    ).setAlpha(0.85).setScale(0.8 + i * 0.15).setDepth(-9);
+    const tween = scene.tweens.add({
       targets: cloud,
-      x: cloud.x + W + 200,
+      x: cloud.x + w + 200,
       duration: Phaser.Math.Between(26000, 40000),
       repeat: -1,
       onRepeat: () => { cloud.x = -120; }
     });
+    objects.push(cloud);
+    tweens.push(tween);
   }
 
   // 地面(パステルグリーンの芝生とお花)
-  const ground = scene.add.graphics();
+  const ground = scene.add.graphics().setDepth(-8);
   ground.fillStyle(0xbde8b4, 1);
-  ground.fillRect(0, H - GROUND_H, W, GROUND_H);
+  ground.fillRect(0, h - GROUND_H, w, GROUND_H);
   ground.fillStyle(0xa9dfa0, 1);
-  for (let x = -10; x < W + 10; x += 40) {
-    ground.fillEllipse(x, H - GROUND_H + 4, 52, 22);
+  for (let x = -10; x < w + 10; x += 40) {
+    ground.fillEllipse(x, h - GROUND_H + 4, 52, 22);
   }
   const flowerColors = [0xffffff, 0xffd6e4, 0xfff3b8];
-  for (let i = 0; i < 9; i++) {
+  const flowerCount = Math.ceil(w / 52);
+  for (let i = 0; i < flowerCount; i++) {
     const fx = 20 + i * 52 + Phaser.Math.Between(-10, 10);
-    const fy = H - GROUND_H + Phaser.Math.Between(26, 66);
+    const fy = h - GROUND_H + Phaser.Math.Between(26, 66);
     const c = flowerColors[i % flowerColors.length];
     ground.fillStyle(c, 1);
     for (let p = 0; p < 5; p++) {
@@ -194,6 +206,32 @@ function drawBackground(scene) {
     ground.fillStyle(0xffc94d, 1);
     ground.fillCircle(fx, fy, 4);
   }
+  objects.push(ground);
+
+  return { objects, tweens };
+}
+
+// 背景を描画し、リサイズ時には描き直して relayout コールバックを呼ぶ
+function makeBackgroundResponsive(scene, relayout) {
+  let bg = drawBackground(scene);
+  const onResize = () => {
+    if (!scene.scene.isActive()) return;
+    bg.tweens.forEach((t) => t.remove());
+    bg.objects.forEach((o) => o.destroy());
+    bg = drawBackground(scene);
+    if (relayout) relayout();
+  };
+  scene.scale.on('resize', onResize);
+  scene.events.once('shutdown', () => scene.scale.off('resize', onResize));
+}
+
+// リサイズでレイアウトが大きく変わるシーン(タイトル等)は作り直すのが確実
+function restartOnResize(scene) {
+  const onResize = () => {
+    if (scene.scene.isActive()) scene.scene.restart();
+  };
+  scene.scale.on('resize', onResize);
+  scene.events.once('shutdown', () => scene.scale.off('resize', onResize));
 }
 
 // ---------------------------------------------------------------------------
@@ -333,12 +371,18 @@ class TitleScene extends Phaser.Scene {
   constructor() { super('title'); }
 
   create() {
-    drawBackground(this);
+    makeBackgroundResponsive(this);
+    restartOnResize(this);
 
-    const paw = this.add.image(W / 2, 200, 'paw').setScale(1.6);
+    const cx = this.scale.width / 2;
+    const gh = this.scale.height;
+    // デザイン基準(720px)との差分ぶんだけ縦位置を中央に寄せる
+    const offY = (gh - H) / 2;
+
+    const paw = this.add.image(cx, 200 + offY, 'paw').setScale(1.6);
     this.tweens.add({
       targets: paw,
-      y: 185,
+      y: 185 + offY,
       angle: 6,
       duration: 1200,
       yoyo: true,
@@ -346,20 +390,20 @@ class TitleScene extends Phaser.Scene {
       ease: 'Sine.easeInOut'
     });
 
-    this.add.text(W / 2, 330, 'にくきゅう\nキャッチ！', textStyle(52, '#ff6f9c', 10))
+    this.add.text(cx, 330 + offY, 'にくきゅう\nキャッチ！', textStyle(52, '#ff6f9c', 10))
       .setOrigin(0.5).setLineSpacing(6);
 
-    this.add.text(W / 2, 448,
+    this.add.text(cx, 448 + offY,
       'おちてくる にくきゅうを タップして\nじめんに おとさないでね！\nぜんぶ おちたら ゲームオーバー',
       textStyle(20, '#8a6d5c', 4)
     ).setOrigin(0.5).setLineSpacing(8);
 
     const best = loadBest();
     if (best > 0) {
-      this.add.text(W / 2, 522, `ベストスコア: ${best}`, textStyle(22, '#ffa04d', 5)).setOrigin(0.5);
+      this.add.text(cx, 522 + offY, `ベストスコア: ${best}`, textStyle(22, '#ffa04d', 5)).setOrigin(0.5);
     }
 
-    const startText = this.add.text(W / 2, 575, 'タップして スタート！', textStyle(28, '#ff6f9c'))
+    const startText = this.add.text(cx, 575 + offY, 'タップして スタート！', textStyle(28, '#ff6f9c'))
       .setOrigin(0.5);
     this.tweens.add({
       targets: startText,
@@ -370,7 +414,7 @@ class TitleScene extends Phaser.Scene {
     });
 
     // 草むらからひょっこり顔を出す猫
-    this.add.image(W / 2, H - 55, 'cat-happy');
+    this.add.image(cx, gh - 55, 'cat-happy');
 
     this.input.once('pointerdown', () => {
       SoundFX.start();
@@ -386,21 +430,20 @@ class GameScene extends Phaser.Scene {
   constructor() { super('game'); }
 
   create() {
-    drawBackground(this);
-
     this.score = 0;
     this.best = loadBest();
     this.gravityY = 240;
     this.isGameOver = false;
 
-    // 左右と上でだけ跳ね返り、下には抜ける
-    this.physics.world.setBounds(0, -60, W, H + 260);
-    this.physics.world.setBoundsCollision(true, true, true, false);
+    makeBackgroundResponsive(this, () => this.relayout());
 
     this.paws = this.physics.add.group();
 
     this.scoreText = this.add.text(20, 16, 'スコア 0', textStyle(34, '#ff6f9c'));
-    this.add.text(W - 20, 24, `ベスト ${this.best}`, textStyle(20, '#ffa04d', 4)).setOrigin(1, 0);
+    this.bestText = this.add.text(this.scale.width - 20, 24, `ベスト ${this.best}`, textStyle(20, '#ffa04d', 4))
+      .setOrigin(1, 0);
+
+    this.relayout();
 
     // 最初の肉球
     this.time.delayedCall(400, () => this.spawnPaw());
@@ -418,12 +461,24 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  // 現在の画面サイズに合わせて物理境界と UI を配置し直す
+  relayout() {
+    const gw = this.scale.width;
+    const gh = this.scale.height;
+    // 左右と上でだけ跳ね返り、下には抜ける
+    this.physics.world.setBounds(0, -60, gw, gh + 260, true, true, true, false);
+    this.bestText.setPosition(gw - 20, 24);
+  }
+
   spawnPaw() {
     if (this.isGameOver) return;
-    const x = Phaser.Math.Between(70, W - 70);
+    const x = Phaser.Math.Between(70, this.scale.width - 70);
     const paw = this.paws.create(x, -70, 'paw');
     paw.setBounce(0.9, 0.4);
-    paw.setCollideWorldBounds(true);
+    // 画面上端より上で出現するため、そのまま境界衝突を有効にすると
+    // 上端(-60)にめり込んで落下速度がリセットされてしまう。
+    // 画面内に入ってから update() で有効化する
+    paw.setCollideWorldBounds(false);
     paw.body.gravity.y = this.gravityY;
     paw.setVelocity(Phaser.Math.Between(-60, 60), Phaser.Math.Between(30, 90));
     paw.setAngularVelocity(Phaser.Math.Between(-40, 40));
@@ -495,6 +550,7 @@ class GameScene extends Phaser.Scene {
   }
 
   dropPaw(paw) {
+    const gh = this.scale.height;
     paw.disableInteractive();
     this.paws.remove(paw);
     paw.body.enable = false;
@@ -502,7 +558,7 @@ class GameScene extends Phaser.Scene {
     SoundFX.poof();
     this.cameras.main.shake(120, 0.004);
 
-    const oops = this.add.text(paw.x, H - GROUND_H - 70, 'あぅ…', textStyle(22, '#8a6d5c', 4))
+    const oops = this.add.text(paw.x, gh - GROUND_H - 70, 'あぅ…', textStyle(22, '#8a6d5c', 4))
       .setOrigin(0.5);
     this.tweens.add({
       targets: oops,
@@ -515,7 +571,7 @@ class GameScene extends Phaser.Scene {
     // ぺたんとつぶれて消える
     this.tweens.add({
       targets: paw,
-      y: H - GROUND_H + 10,
+      y: gh - GROUND_H + 10,
       scaleY: 0.35,
       scaleX: 1.25,
       angle: 0,
@@ -531,7 +587,8 @@ class GameScene extends Phaser.Scene {
   }
 
   announce(message) {
-    const t = this.add.text(W / 2, 130, message, textStyle(26, '#ffa04d')).setOrigin(0.5).setScale(0);
+    const t = this.add.text(this.scale.width / 2, 130, message, textStyle(26, '#ffa04d'))
+      .setOrigin(0.5).setScale(0);
     this.tweens.add({
       targets: t,
       scale: 1,
@@ -568,10 +625,14 @@ class GameScene extends Phaser.Scene {
     // だんだん落下が速くなる
     this.gravityY = Math.min(560, this.gravityY + delta * 0.004);
 
+    const groundY = this.scale.height - GROUND_H + 6;
     this.paws.getChildren().forEach((paw) => {
       if (!paw.active) return;
       paw.body.gravity.y = this.gravityY;
-      if (paw.y > H - GROUND_H + 6) {
+      if (!paw.body.collideWorldBounds && paw.body.top > 10) {
+        paw.setCollideWorldBounds(true);
+      }
+      if (paw.y > groundY) {
         this.dropPaw(paw);
       }
     });
@@ -590,11 +651,16 @@ class GameOverScene extends Phaser.Scene {
   }
 
   create() {
-    drawBackground(this);
+    makeBackgroundResponsive(this);
+    restartOnResize(this);
 
-    this.add.text(W / 2, 150, 'ゲームオーバー', textStyle(46, '#ff6f9c', 9)).setOrigin(0.5);
+    const cx = this.scale.width / 2;
+    const gh = this.scale.height;
+    const offY = (gh - H) / 2;
 
-    const cat = this.add.image(W / 2, 290, 'cat-sad').setScale(1.2);
+    this.add.text(cx, 150 + offY, 'ゲームオーバー', textStyle(46, '#ff6f9c', 9)).setOrigin(0.5);
+
+    const cat = this.add.image(cx, 290 + offY, 'cat-sad').setScale(1.2);
     this.tweens.add({
       targets: cat,
       angle: 3,
@@ -604,10 +670,10 @@ class GameOverScene extends Phaser.Scene {
       ease: 'Sine.easeInOut'
     });
 
-    this.add.text(W / 2, 420, `スコア: ${this.finalScore}`, textStyle(36, '#ff6f9c')).setOrigin(0.5);
+    this.add.text(cx, 420 + offY, `スコア: ${this.finalScore}`, textStyle(36, '#ff6f9c')).setOrigin(0.5);
 
     if (this.finalScore > this.prevBest) {
-      const record = this.add.text(W / 2, 472, '✨ しんきろく！ ✨', textStyle(28, '#ffa04d')).setOrigin(0.5);
+      const record = this.add.text(cx, 472 + offY, '✨ しんきろく！ ✨', textStyle(28, '#ffa04d')).setOrigin(0.5);
       this.tweens.add({
         targets: record,
         scale: 1.1,
@@ -616,11 +682,11 @@ class GameOverScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      this.add.text(W / 2, 472, `ベスト: ${Math.max(this.prevBest, this.finalScore)}`,
+      this.add.text(cx, 472 + offY, `ベスト: ${Math.max(this.prevBest, this.finalScore)}`,
         textStyle(24, '#ffa04d', 5)).setOrigin(0.5);
     }
 
-    const retry = this.add.text(W / 2, 560, 'タップして もういちど！', textStyle(28, '#ff6f9c')).setOrigin(0.5);
+    const retry = this.add.text(cx, 560 + offY, 'タップして もういちど！', textStyle(28, '#ff6f9c')).setOrigin(0.5);
     this.tweens.add({
       targets: retry,
       alpha: 0.25,
@@ -634,11 +700,11 @@ class GameOverScene extends Phaser.Scene {
       delay: 1400,
       loop: true,
       callback: () => {
-        const p = this.add.image(Phaser.Math.Between(40, W - 40), -60, 'paw')
+        const p = this.add.image(Phaser.Math.Between(40, this.scale.width - 40), -60, 'paw')
           .setScale(Phaser.Math.FloatBetween(0.4, 0.7)).setAlpha(0.6);
         this.tweens.add({
           targets: p,
-          y: H + 80,
+          y: this.scale.height + 80,
           angle: Phaser.Math.Between(-90, 90),
           duration: Phaser.Math.Between(5000, 8000),
           onComplete: () => p.destroy()
@@ -670,9 +736,9 @@ const config = {
     }
   },
   scale: {
-    mode: Phaser.Scale.FIT,
-    // 中央寄せは #game の flexbox に任せる。CENTER_BOTH だと Phaser が canvas に
-    // margin を直接セットし、flex の中央寄せと二重になって右にずれる
+    // EXPAND: アスペクト比を保ってスケールしつつ、ゲーム世界を広げて
+    // 画面全体を覆う(レターボックスの余白が出ない)
+    mode: Phaser.Scale.EXPAND,
     autoCenter: Phaser.Scale.NO_CENTER
   },
   scene: [BootScene, TitleScene, GameScene, GameOverScene]
