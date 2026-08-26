@@ -671,7 +671,9 @@ const config = {
   },
   scale: {
     mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH
+    // 中央寄せは #game の flexbox に任せる。CENTER_BOTH だと Phaser が canvas に
+    // margin を直接セットし、flex の中央寄せと二重になって右にずれる
+    autoCenter: Phaser.Scale.NO_CENTER
   },
   scene: [BootScene, TitleScene, GameScene, GameOverScene]
 };
