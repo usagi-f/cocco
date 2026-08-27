@@ -12,6 +12,13 @@ const GROUND_H = 84;
 const FONT = '"M PLUS Rounded 1c", "Hiragino Maru Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif';
 const BEST_KEY = 'nikukyu-catch-best';
 
+const MAX_LIVES = 3;        // 落とせる回数
+const FEVER_COMBO = 10;     // フィーバー突入コンボ数
+const FEVER_MS = 6000;      // フィーバー継続時間
+const GOLDEN_CHANCE = 0.08; // 金の肉球の出現率
+const GOLDEN_BONUS = 10;    // 金の肉球のボーナス点
+const REARM_VY = 150;       // この落下速度を超えると再び得点対象になる
+
 // ---------------------------------------------------------------------------
 // 効果音(Web Audio 合成)
 // ---------------------------------------------------------------------------
@@ -27,12 +34,13 @@ const SoundFX = {
     return this.ctx;
   },
 
-  // 「にゃっ♪」猫の鳴き声。ピッチを上げてから下げるグライドで鳴き声らしさを出す
-  meow() {
+  // 「にゃっ♪」猫の鳴き声。ピッチを上げてから下げるグライドで鳴き声らしさを出す。
+  // pitch を上げるとコンボ中の高い声になる
+  meow(pitch) {
     const ctx = this.ensure();
     if (!ctx) return;
     const t = ctx.currentTime;
-    const base = 460 + Math.random() * 240;
+    const base = (460 + Math.random() * 240) * (pitch || 1);
 
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
@@ -92,6 +100,16 @@ const SoundFX = {
   // スタート時の明るいファンファーレ
   start() {
     this.jingle([523, 659, 784], 0.09, 0.22);
+  },
+
+  // フィーバー突入のキラキラした上昇音
+  fever() {
+    this.jingle([659, 784, 988, 1319], 0.08, 0.25);
+  },
+
+  // 金の肉球のボーナス音
+  golden() {
+    this.jingle([784, 1047, 1319], 0.06, 0.2);
   },
 
   // ゲームオーバーの切ないジングル
@@ -241,7 +259,13 @@ class BootScene extends Phaser.Scene {
   constructor() { super('boot'); }
 
   create() {
-    this.makePawTexture();
+    // 通常の肉球と、レアな金の肉球
+    this.makePawTexture('paw', {
+      fur: 0xfff6ec, outline: 0xf2c19d, pad: 0xffa3bd, shine: 0xffc4d6
+    });
+    this.makePawTexture('paw-gold', {
+      fur: 0xffedb3, outline: 0xe0b04e, pad: 0xf7b733, shine: 0xffe9a0, sparkle: true
+    });
     this.makeHeartTexture();
     this.makeCloudTexture();
     this.makeCatTexture('cat-happy', false);
@@ -249,25 +273,34 @@ class BootScene extends Phaser.Scene {
     this.scene.start('title');
   }
 
-  // 猫の肉球:クリーム色のおててにピンクのぷにぷに
-  makePawTexture() {
+  // 猫の肉球:おててにぷにぷにパッド
+  makePawTexture(key, colors) {
     const g = this.add.graphics();
-    g.fillStyle(0xfff6ec, 1);
+    g.fillStyle(colors.fur, 1);
     g.fillCircle(64, 70, 52);
-    g.lineStyle(5, 0xf2c19d, 1);
+    g.lineStyle(5, colors.outline, 1);
     g.strokeCircle(64, 70, 52);
 
-    g.fillStyle(0xffa3bd, 1);
+    g.fillStyle(colors.pad, 1);
     g.fillEllipse(64, 86, 52, 40);   // メインパッド
     g.fillEllipse(30, 48, 20, 25);   // 指のぷにぷに x4
     g.fillEllipse(52, 34, 20, 25);
     g.fillEllipse(76, 34, 20, 25);
     g.fillEllipse(98, 48, 20, 25);
 
-    g.fillStyle(0xffc4d6, 1);
+    g.fillStyle(colors.shine, 1);
     g.fillEllipse(56, 80, 18, 12);   // パッドのつや
 
-    g.generateTexture('paw', 128, 128);
+    if (colors.sparkle) {
+      // 金の肉球のキラキラ
+      g.fillStyle(0xffffff, 0.9);
+      [[26, 76], [100, 72], [64, 112]].forEach(([sx, sy]) => {
+        g.fillTriangle(sx, sy - 6, sx - 4, sy, sx + 4, sy);
+        g.fillTriangle(sx, sy + 6, sx - 4, sy, sx + 4, sy);
+      });
+    }
+
+    g.generateTexture(key, 128, 128);
     g.destroy();
   }
 
@@ -394,7 +427,7 @@ class TitleScene extends Phaser.Scene {
       .setOrigin(0.5).setLineSpacing(6);
 
     this.add.text(cx, 448 + offY,
-      'おちてくる にくきゅうを タップして\nじめんに おとさないでね！\nぜんぶ おちたら ゲームオーバー',
+      'おちてくる にくきゅうを タップ！\n3かい おとしたら ゲームオーバー\nそらに にくきゅうが おおいほど 高とくてん♪',
       textStyle(20, '#8a6d5c', 4)
     ).setOrigin(0.5).setLineSpacing(8);
 
@@ -434,14 +467,25 @@ class GameScene extends Phaser.Scene {
     this.best = loadBest();
     this.gravityY = 240;
     this.isGameOver = false;
+    this.lives = MAX_LIVES;
+    this.combo = 0;
+    this.lastTapped = null;
+    this.feverUntil = 0;
 
     makeBackgroundResponsive(this, () => this.relayout());
 
     this.paws = this.physics.add.group();
 
     this.scoreText = this.add.text(20, 16, 'スコア 0', textStyle(34, '#ff6f9c'));
+    this.comboText = this.add.text(20, 64, '', textStyle(20, '#b28ae0', 4));
     this.bestText = this.add.text(this.scale.width - 20, 24, `ベスト ${this.best}`, textStyle(20, '#ffa04d', 4))
       .setOrigin(1, 0);
+
+    // 残りライフ(ハート)
+    this.hearts = [];
+    for (let i = 0; i < MAX_LIVES; i++) {
+      this.hearts.push(this.add.image(0, 0, 'heart').setScale(1.5));
+    }
 
     this.relayout();
 
@@ -468,12 +512,23 @@ class GameScene extends Phaser.Scene {
     // 左右と上でだけ跳ね返り、下には抜ける
     this.physics.world.setBounds(0, -60, gw, gh + 260, true, true, true, false);
     this.bestText.setPosition(gw - 20, 24);
+    // ベスト表示の下に右詰めで並べる(スコア表示との重なりを避ける)
+    this.hearts.forEach((h, i) => h.setPosition(gw - 28 - (MAX_LIVES - 1 - i) * 46, 74));
+  }
+
+  get isFever() {
+    return this.time.now < this.feverUntil;
   }
 
   spawnPaw() {
     if (this.isGameOver) return;
+    const golden = Math.random() < GOLDEN_CHANCE;
     const x = Phaser.Math.Between(70, this.scale.width - 70);
-    const paw = this.paws.create(x, -70, 'paw');
+    const paw = this.paws.create(x, -70, golden ? 'paw-gold' : 'paw');
+    paw.setData('golden', golden);
+    // armed = 「拾うと得点になる」状態。タップで消費し、
+    // しっかり落下速度が乗る(REARM_VY 超え)と再チャージされる
+    paw.setData('armed', true);
     paw.setBounce(0.9, 0.4);
     // 画面上端より上で出現するため、そのまま境界衝突を有効にすると
     // 上端(-60)にめり込んで落下速度がリセットされてしまう。
@@ -493,8 +548,11 @@ class GameScene extends Phaser.Scene {
   tapPaw(paw, pointer) {
     if (this.isGameOver || !paw.active) return;
 
-    // 上に跳ねる。タップ位置の左右で弾く方向が変わる
-    const vy = -(300 + this.gravityY * 0.35 + Math.random() * 60);
+    // 上空ほど跳ね上げ力を弱くする(連打で天井に張り付く攻略の対策)。
+    // 画面の上 40% では減衰し、最上部では約 2 割の力しか出ない
+    const gh = this.scale.height;
+    const power = 0.2 + 0.8 * Phaser.Math.Clamp(paw.y / (gh * 0.4), 0, 1);
+    const vy = -(300 + this.gravityY * 0.35 + Math.random() * 60) * power;
     let vx = (paw.x - pointer.worldX) * 8 + Phaser.Math.Between(-40, 40);
     vx = Phaser.Math.Clamp(paw.body.velocity.x * 0.3 + vx, -220, 220);
     paw.setVelocity(vx, vy);
@@ -510,8 +568,34 @@ class GameScene extends Phaser.Scene {
       ease: 'Quad.easeOut'
     });
 
-    SoundFX.meow();
-    this.score += 1;
+    // 鳴き声はいつでも。コンボが伸びるほど声が高くなる
+    SoundFX.meow(1 + Math.min(this.combo, 15) * 0.04);
+
+    // 得点は「ちゃんと落ちてきた肉球を拾ったとき」だけ
+    if (paw.getData('armed')) {
+      paw.setData('armed', false);
+      this.scorePaw(paw);
+    }
+  }
+
+  scorePaw(paw) {
+    // コンボ: 直前と違う肉球を拾うと伸び、同じ肉球の拾い直しでリセット
+    this.combo = (this.lastTapped === paw) ? 1 : this.combo + 1;
+    this.lastTapped = paw;
+
+    if (!this.isFever && this.combo >= FEVER_COMBO) {
+      this.startFever();
+    }
+
+    // 空中の肉球が多いほど高得点。金の肉球はボーナス、フィーバー中は2倍
+    let gain = this.paws.countActive(true);
+    if (paw.getData('golden')) {
+      gain += GOLDEN_BONUS;
+      SoundFX.golden();
+    }
+    if (this.isFever) gain *= 2;
+
+    this.score += gain;
     this.scoreText.setText(`スコア ${this.score}`);
     this.tweens.add({
       targets: this.scoreText,
@@ -519,11 +603,13 @@ class GameScene extends Phaser.Scene {
       duration: 90,
       yoyo: true
     });
+    this.comboText.setText(this.combo >= 2 ? `コンボ x${this.combo}` : '');
 
-    // 鳴き声の吹き出しとハート
+    // 鳴き声の吹き出しと獲得点
     const cries = ['にゃ！', 'ニャン♪', 'みゃ！', 'にゃ〜ん'];
-    const cry = this.add.text(paw.x, paw.y - 60, Phaser.Utils.Array.GetRandom(cries),
-      textStyle(24, '#ff6f9c', 5)).setOrigin(0.5);
+    const cry = this.add.text(paw.x, paw.y - 60,
+      `${Phaser.Utils.Array.GetRandom(cries)}\n+${gain}`,
+      textStyle(24, paw.getData('golden') ? '#e8a400' : '#ff6f9c', 5)).setOrigin(0.5);
     this.tweens.add({
       targets: cry,
       y: cry.y - 50,
@@ -532,12 +618,14 @@ class GameScene extends Phaser.Scene {
       onComplete: () => cry.destroy()
     });
 
-    for (let i = 0; i < 3; i++) {
+    const heartCount = paw.getData('golden') ? 8 : 3;
+    for (let i = 0; i < heartCount; i++) {
       const heart = this.add.image(
         paw.x + Phaser.Math.Between(-30, 30),
         paw.y + Phaser.Math.Between(-20, 20),
         'heart'
       ).setScale(Phaser.Math.FloatBetween(0.5, 0.9));
+      if (paw.getData('golden')) heart.setTint(0xffd75e);
       this.tweens.add({
         targets: heart,
         y: heart.y - Phaser.Math.Between(40, 80),
@@ -549,6 +637,45 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  startFever() {
+    this.feverUntil = this.time.now + FEVER_MS;
+    SoundFX.fever();
+
+    const banner = this.add.text(this.scale.width / 2, this.scale.height * 0.3,
+      '✨ にゃんにゃんフィーバー！ ✨\nとくてん 2ばい！',
+      textStyle(30, '#ff8c00', 7)).setOrigin(0.5).setScale(0);
+    this.tweens.add({ targets: banner, scale: 1, duration: 250, ease: 'Back.easeOut' });
+    this.tweens.add({
+      targets: banner, alpha: 0, delay: 1600, duration: 400,
+      onComplete: () => banner.destroy()
+    });
+
+    this.scoreText.setColor('#ff8c00');
+
+    // フィーバー中はハートの雨
+    const rain = this.time.addEvent({
+      delay: 200,
+      repeat: Math.floor(FEVER_MS / 200) - 1,
+      callback: () => {
+        const h = this.add.image(
+          Phaser.Math.Between(10, this.scale.width - 10), -20, 'heart'
+        ).setScale(Phaser.Math.FloatBetween(0.6, 1.1)).setAlpha(0.8).setDepth(-1);
+        this.tweens.add({
+          targets: h,
+          y: this.scale.height + 40,
+          angle: Phaser.Math.Between(-180, 180),
+          duration: Phaser.Math.Between(1800, 3000),
+          onComplete: () => h.destroy()
+        });
+      }
+    });
+
+    this.time.delayedCall(FEVER_MS, () => {
+      rain.remove();
+      if (!this.isGameOver) this.scoreText.setColor('#ff6f9c');
+    });
+  }
+
   dropPaw(paw) {
     const gh = this.scale.height;
     paw.disableInteractive();
@@ -557,6 +684,11 @@ class GameScene extends Phaser.Scene {
 
     SoundFX.poof();
     this.cameras.main.shake(120, 0.004);
+
+    // 落とすとコンボは切れる
+    this.combo = 0;
+    this.comboText.setText('');
+    if (this.lastTapped === paw) this.lastTapped = null;
 
     const oops = this.add.text(paw.x, gh - GROUND_H - 70, 'あぅ…', textStyle(22, '#8a6d5c', 4))
       .setOrigin(0.5);
@@ -581,8 +713,30 @@ class GameScene extends Phaser.Scene {
       onComplete: () => paw.destroy()
     });
 
-    if (!this.isGameOver && this.paws.countActive(true) === 0) {
+    // ライフを減らす
+    this.lives -= 1;
+    const lostHeart = this.hearts[this.lives];
+    if (lostHeart) {
+      this.tweens.add({
+        targets: lostHeart,
+        scale: 0.6,
+        alpha: 0.25,
+        duration: 300,
+        ease: 'Quad.easeIn'
+      });
+      lostHeart.setTint(0xbbbbbb);
+    }
+
+    if (!this.isGameOver && this.lives <= 0) {
       this.gameOver();
+      return;
+    }
+
+    // ライフが残っているのに空中が空になったら、少し待って補充する
+    if (!this.isGameOver && this.paws.countActive(true) === 0) {
+      this.time.delayedCall(700, () => {
+        if (!this.isGameOver && this.paws.countActive(true) === 0) this.spawnPaw();
+      });
     }
   }
 
@@ -631,6 +785,10 @@ class GameScene extends Phaser.Scene {
       paw.body.gravity.y = this.gravityY;
       if (!paw.body.collideWorldBounds && paw.body.top > 10) {
         paw.setCollideWorldBounds(true);
+      }
+      // しっかり落下速度が乗ったら、再び「拾うと得点」の状態に戻す
+      if (!paw.getData('armed') && paw.body.velocity.y > REARM_VY) {
+        paw.setData('armed', true);
       }
       if (paw.y > groundY) {
         this.dropPaw(paw);
