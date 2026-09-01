@@ -476,15 +476,16 @@ class GameScene extends Phaser.Scene {
 
     this.paws = this.physics.add.group();
 
-    this.scoreText = this.add.text(20, 16, 'スコア 0', textStyle(34, '#ff6f9c'));
-    this.comboText = this.add.text(20, 64, '', textStyle(20, '#b28ae0', 4));
+    // HUD は肉球より手前に置く
+    this.scoreText = this.add.text(20, 16, 'スコア 0', textStyle(34, '#ff6f9c')).setDepth(20);
+    this.comboText = this.add.text(20, 64, '', textStyle(20, '#b28ae0', 4)).setDepth(20);
     this.bestText = this.add.text(this.scale.width - 20, 24, `ベスト ${this.best}`, textStyle(20, '#ffa04d', 4))
-      .setOrigin(1, 0);
+      .setOrigin(1, 0).setDepth(20);
 
     // 残りライフ(ハート)
     this.hearts = [];
     for (let i = 0; i < MAX_LIVES; i++) {
-      this.hearts.push(this.add.image(0, 0, 'heart').setScale(1.5));
+      this.hearts.push(this.add.image(0, 0, 'heart').setScale(1.5).setDepth(20));
     }
 
     this.relayout();
@@ -609,7 +610,7 @@ class GameScene extends Phaser.Scene {
     const cries = ['にゃ！', 'ニャン♪', 'みゃ！', 'にゃ〜ん'];
     const cry = this.add.text(paw.x, paw.y - 60,
       `${Phaser.Utils.Array.GetRandom(cries)}\n+${gain}`,
-      textStyle(24, paw.getData('golden') ? '#e8a400' : '#ff6f9c', 5)).setOrigin(0.5);
+      textStyle(24, paw.getData('golden') ? '#e8a400' : '#ff6f9c', 5)).setOrigin(0.5).setDepth(15);
     this.tweens.add({
       targets: cry,
       y: cry.y - 50,
@@ -643,7 +644,7 @@ class GameScene extends Phaser.Scene {
 
     const banner = this.add.text(this.scale.width / 2, this.scale.height * 0.3,
       '✨ にゃんにゃんフィーバー！ ✨\nとくてん 2ばい！',
-      textStyle(30, '#ff8c00', 7)).setOrigin(0.5).setScale(0);
+      textStyle(30, '#ff8c00', 7)).setOrigin(0.5).setScale(0).setDepth(25);
     this.tweens.add({ targets: banner, scale: 1, duration: 250, ease: 'Back.easeOut' });
     this.tweens.add({
       targets: banner, alpha: 0, delay: 1600, duration: 400,
@@ -691,7 +692,7 @@ class GameScene extends Phaser.Scene {
     if (this.lastTapped === paw) this.lastTapped = null;
 
     const oops = this.add.text(paw.x, gh - GROUND_H - 70, 'あぅ…', textStyle(22, '#8a6d5c', 4))
-      .setOrigin(0.5);
+      .setOrigin(0.5).setDepth(15);
     this.tweens.add({
       targets: oops,
       y: oops.y - 40,
@@ -742,7 +743,7 @@ class GameScene extends Phaser.Scene {
 
   announce(message) {
     const t = this.add.text(this.scale.width / 2, 130, message, textStyle(26, '#ffa04d'))
-      .setOrigin(0.5).setScale(0);
+      .setOrigin(0.5).setScale(0).setDepth(15);
     this.tweens.add({
       targets: t,
       scale: 1,
